@@ -4,7 +4,7 @@
 
 ---
 
-### Range Breakout Candles with Pullback Detection - Fixed
+### Range Breakout Candles with Pullback Detection
 
 Pine Script v5 indicator grouping candles into breakout candles (new high/low) and detecting pullbacks in local trend (up/down based on 2 candles).
 
@@ -20,7 +20,7 @@ Pine Script v5 indicator grouping candles into breakout candles (new high/low) a
 **Usage:** Enter on pullbacks in breakout trend direction. Works on crypto/forex, 1H-1D timeframes. Fixed flags and arrays for realtime stability.
 
 
-### Block of Candles (BoC) – FULLY FIXED ALL TF
+### Block of Candles (BoC)
 
 Indicator groups consecutive candles into a single “block of candles” (BoC) to highlight consolidation zones and their eventual breakouts on any timeframe.
 It merges candles while price stays inside a reference range, counts block length and volume, and closes a block only when price breaks above/below the range, 
