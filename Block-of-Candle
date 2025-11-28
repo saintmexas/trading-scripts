@@ -1,0 +1,319 @@
+//@version=5
+indicator("Block of Candles (BoC) - FULLY FIXED ALL TF", shorttitle="BoC Pro", overlay=false, max_boxes_count=500, max_labels_count=50)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUT PARAMETERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+colorBullish = input.color(color.new(color.green, 0), "Bullish Candle Color", group="Colors")
+colorBearish = input.color(color.new(color.red, 0), "Bearish Candle Color", group="Colors")
+colorWick = input.color(color.new(color.gray, 0), "Wick Color", group="Colors")
+showCandleCount = input.bool(true, "Show Current Block Candle Count", group="Colors")
+
+resetMode = input.string("None", "Reference Candle Reset Mode", options=["None", "Daily", "Weekly", "Monthly", "Session", "Custom Hours"], tooltip="Automatically reset reference candle at specified intervals", group="Reset")
+customResetHours = input.int(4, "Custom Reset Hours", minval=1, maxval=168, group="Reset")
+sessionResetHour = input.int(8, "Session Reset Hour (UTC)", minval=0, maxval=23, group="Reset")
+
+showMitigationZones = input.bool(true, "Show Closed Block Zones", group="Mitigation Zones")
+maxZonesToShow = input.int(20, "Max Zones to Display", minval=1, maxval=100, group="Mitigation Zones")
+zoneBullishColor = input.color(color.new(color.green, 85), "Bullish Zone Color", group="Mitigation Zones")
+zoneBearishColor = input.color(color.new(color.red, 85), "Bearish Zone Color", group="Mitigation Zones")
+showZoneLabels = input.bool(true, "Show Zone Labels (# candles)", group="Mitigation Zones")
+extendZonesRight = input.bool(true, "Extend Zones to Right", group="Mitigation Zones")
+
+enableMTF = input.bool(false, "Enable Multi-Timeframe BoC", group="Multi-Timeframe")
+mtfTimeframe = input.timeframe("240", "Higher Timeframe", group="Multi-Timeframe")
+mtfCandleColor = input.color(color.new(color.orange, 30), "MTF Candle Color", group="Multi-Timeframe")
+
+showStats = input.bool(true, "Show Statistics Table", group="Statistics")
+statsPosition = input.string("Top Right", "Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group="Statistics")
+
+alertOnBlockClose = input.bool(false, "Alert on Any Block Close", group="Alerts")
+alertOnBullishBreak = input.bool(false, "Alert on Bullish Breakout Only", group="Alerts")
+alertOnBearishBreak = input.bool(false, "Alert on Bearish Breakout Only", group="Alerts")
+alertOnLongBlock = input.bool(false, "Alert on Long Block (>X candles)", group="Alerts")
+longBlockThreshold = input.int(20, "Long Block Threshold", minval=5, group="Alerts")
+
+filterEnabled = input.bool(false, "Enable Block Quality Filtering", group="Filters")
+minCandlesInBlock = input.int(3, "Min Candles per Block", minval=1, group="Filters")
+minBlockRangePercent = input.float(0.1, "Min Block Range (%)", minval=0.01, step=0.05, group="Filters")
+filterByVolume = input.bool(false, "Filter by Volume Spike", group="Filters")
+volumeSpikeMultiplier = input.float(1.5, "Volume Spike Multiplier", minval=1.0, step=0.1, group="Filters")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATE VARIABLES
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float ref_open = na
+var float ref_high = na
+var float ref_low = na
+var float ref_close = na
+
+var float indicator_open = na
+var float indicator_high = na
+var float indicator_low = na
+var float indicator_close = na
+
+var int blockCandleCount = 0
+var float blockTotalVolume = 0.0
+var bool isInitialized = false
+var int g_lastResetTime = 0
+var int blockStartBar = 0
+
+var array<box> closedBlockBoxes = array.new<box>()
+var array<label> closedBlockLabels = array.new<label>()
+var array<string> closedBlockTypes = array.new<string>()
+
+var int totalBlocksClosed = 0
+var float avgBlockLength = 0.0
+var float avgBlockRange = 0.0
+var int bullishBreakouts = 0
+var int bearishBreakouts = 0
+var int longestBlock = 0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+f_getBodyMin(float o, float c) => math.min(o, c)
+f_getBodyMax(float o, float c) => math.max(o, c)
+f_isInRange(float value, float rangeMin, float rangeMax) => value >= rangeMin and value <= rangeMax
+
+f_getTablePosition(string pos) =>
+    pos == "Top Left" ? position.top_left : pos == "Top Center" ? position.top_center : pos == "Top Right" ? position.top_right : pos == "Middle Left" ? position.middle_left : pos == "Middle Center" ? position.middle_center : pos == "Middle Right" ? position.middle_right : pos == "Bottom Left" ? position.bottom_left : pos == "Bottom Center" ? position.bottom_center : position.bottom_right
+
+// FIXED: Complete mitigation zone function with proper distance checking
+f_addMitigationZone(int startBar, int endBar, float zoneHigh, float zoneLow, bool isBullish, int candles) =>
+    if showMitigationZones
+        // CRITICAL FIX: Check if startBar is too far in the past
+        int barsAgo = bar_index - startBar
+        
+        // Pine Script limit: ~500 bars for bar_index positioning
+        // If block started >400 bars ago, skip drawing (too far for reliable rendering)
+        if barsAgo <= 400
+            if array.size(closedBlockBoxes) >= maxZonesToShow
+                box.delete(array.shift(closedBlockBoxes))
+                label.delete(array.shift(closedBlockLabels))
+                array.shift(closedBlockTypes)
+            
+            // Safe positioning: ensure right edge doesn't exceed 500 bars into future
+            int rightEdge = extendZonesRight ? math.min(bar_index + 500, bar_index + 9999) : endBar
+            
+            box blockBox = box.new(left=startBar, top=zoneHigh, right=rightEdge, bottom=zoneLow, border_color=na, bgcolor=isBullish ? zoneBullishColor : zoneBearishColor, extend=extendZonesRight ? extend.right : extend.none)
+            
+            array.push(closedBlockBoxes, blockBox)
+            array.push(closedBlockTypes, isBullish ? "BULL" : "BEAR")
+            
+            if showZoneLabels
+                label zoneLabel = label.new(x=endBar, y=zoneHigh, text=str.tostring(candles), style=label.style_label_down, color=isBullish ? color.new(color.green, 60) : color.new(color.red, 60), textcolor=color.white, size=size.tiny)
+                array.push(closedBlockLabels, zoneLabel)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RESET LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+
+if bar_index == 0
+    g_lastResetTime := time
+
+bool forceReset = if resetMode == "Daily"
+    ta.change(dayofmonth) != 0
+else if resetMode == "Weekly"
+    ta.change(weekofyear) != 0
+else if resetMode == "Monthly"
+    ta.change(month) != 0
+else if resetMode == "Session"
+    hour == sessionResetHour and hour != hour[1]
+else if resetMode == "Custom Hours"
+    int hoursSinceReset = math.floor((time - g_lastResetTime) / (1000 * 60 * 60))
+    bool shouldReset = hoursSinceReset >= customResetHours
+    if shouldReset
+        g_lastResetTime := time
+    shouldReset
+else
+    false
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INITIALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+if not isInitialized or forceReset
+    ref_open := open
+    ref_high := high
+    ref_low := low
+    ref_close := close
+    indicator_open := open
+    indicator_high := high
+    indicator_low := low
+    indicator_close := close
+    blockCandleCount := 1
+    blockTotalVolume := volume
+    blockStartBar := bar_index
+    isInitialized := true
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+
+else
+    float ref_body_min = f_getBodyMin(ref_open, ref_close)
+    float ref_body_max = f_getBodyMax(ref_open, ref_close)
+    float current_body_min = f_getBodyMin(open, close)
+    float current_body_max = f_getBodyMax(open, close)
+    
+    bool closeBlockBullish = current_body_min > ref_high
+    bool closeBlockBearish = current_body_max < ref_low
+    
+    float blockRange = indicator_high - indicator_low
+    float avgBlockVol = blockCandleCount > 0 ? blockTotalVolume / blockCandleCount : 0.0
+    
+    bool passesCountFilter = not filterEnabled or blockCandleCount >= minCandlesInBlock
+    float rangePercent = (blockRange / close) * 100
+    bool passesRangeFilter = not filterEnabled or rangePercent >= minBlockRangePercent
+    float avgVolume20 = ta.sma(volume, 20)
+    bool passesVolumeFilter = not filterByVolume or avgBlockVol >= (avgVolume20 * volumeSpikeMultiplier)
+    bool isValidBlock = passesCountFilter and passesRangeFilter and passesVolumeFilter
+    
+    if (closeBlockBullish or closeBlockBearish) and isValidBlock
+        totalBlocksClosed += 1
+        avgBlockLength := (avgBlockLength * (totalBlocksClosed - 1) + blockCandleCount) / totalBlocksClosed
+        avgBlockRange := (avgBlockRange * (totalBlocksClosed - 1) + blockRange) / totalBlocksClosed
+        
+        if closeBlockBullish
+            bullishBreakouts += 1
+        else
+            bearishBreakouts += 1
+        
+        if blockCandleCount > longestBlock
+            longestBlock := blockCandleCount
+        
+        f_addMitigationZone(blockStartBar, bar_index - 1, indicator_high, indicator_low, closeBlockBullish, blockCandleCount)
+        
+        if alertOnBlockClose or (alertOnBullishBreak and closeBlockBullish) or (alertOnBearishBreak and closeBlockBearish)
+            string alertMsg = closeBlockBullish ? "Bullish Breakout" : "Bearish Breakout"
+            alertMsg := alertMsg + " | Block length: " + str.tostring(blockCandleCount) + " candles"
+            alert(alertMsg, alert.freq_once_per_bar)
+    
+    if closeBlockBullish or closeBlockBearish
+        ref_open := open
+        ref_high := high
+        ref_low := low
+        ref_close := close
+        indicator_open := open
+        indicator_high := high
+        indicator_low := low
+        indicator_close := close
+        blockCandleCount := 1
+        blockTotalVolume := volume
+        blockStartBar := bar_index
+    else
+        bool totallyContained = high <= ref_high and low >= ref_low
+        
+        if totallyContained
+            indicator_close := close
+            blockCandleCount += 1
+            blockTotalVolume += volume
+        else
+            bool openInRefBody = f_isInRange(open, ref_body_min, ref_body_max)
+            bool closeInRefBody = f_isInRange(close, ref_body_min, ref_body_max)
+            bool openInRefRange = f_isInRange(open, ref_low, ref_high)
+            bool closeInRefRange = f_isInRange(close, ref_low, ref_high)
+            bool wickBreaksHigh = high > ref_high
+            bool wickBreaksLow = low < ref_low
+            
+            if (wickBreaksHigh or wickBreaksLow) and openInRefBody and closeInRefBody
+                indicator_high := math.max(indicator_high, high)
+                indicator_low := math.min(indicator_low, low)
+                indicator_close := close
+                blockCandleCount += 1
+                blockTotalVolume += volume
+            else if not openInRefBody and openInRefRange
+                indicator_open := open
+                indicator_high := math.max(indicator_high, high)
+                indicator_low := math.min(indicator_low, low)
+                indicator_close := close
+                ref_open := indicator_open
+                ref_high := indicator_high
+                ref_low := indicator_low
+                ref_close := indicator_close
+                blockCandleCount += 1
+                blockTotalVolume += volume
+            else if not closeInRefBody and closeInRefRange
+                indicator_close := close
+                indicator_high := math.max(indicator_high, high)
+                indicator_low := math.min(indicator_low, low)
+                ref_open := indicator_open
+                ref_high := indicator_high
+                ref_low := indicator_low
+                ref_close := indicator_close
+                blockCandleCount += 1
+                blockTotalVolume += volume
+            else
+                indicator_high := math.max(indicator_high, high)
+                indicator_low := math.min(indicator_low, low)
+                indicator_close := close
+                ref_high := indicator_high
+                ref_low := indicator_low
+                ref_close := indicator_close
+                blockCandleCount += 1
+                blockTotalVolume += volume
+        
+        if alertOnLongBlock and blockCandleCount == longBlockThreshold
+            alert("Long consolidation detected: " + str.tostring(blockCandleCount) + " candles", alert.freq_once_per_bar)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MULTI-TIMEFRAME ANALYSIS
+// ══════════════════════════════════════════════════════════════════════════════
+
+[mtf_o, mtf_h, mtf_l, mtf_c] = request.security(syminfo.tickerid, mtfTimeframe, [indicator_open, indicator_high, indicator_low, indicator_close], lookahead=barmerge.lookahead_off)
+
+float mtf_indicator_open = enableMTF ? mtf_o : na
+float mtf_indicator_high = enableMTF ? mtf_h : na
+float mtf_indicator_low = enableMTF ? mtf_l : na
+float mtf_indicator_close = enableMTF ? mtf_c : na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+color candleColor = indicator_close >= indicator_open ? colorBullish : colorBearish
+
+plotcandle(indicator_open, indicator_high, indicator_low, indicator_close, title="BoC Candle", color=candleColor, wickcolor=colorWick, bordercolor=candleColor)
+
+plotcandle(mtf_indicator_open, mtf_indicator_high, mtf_indicator_low, mtf_indicator_close, title="MTF BoC", color=mtfCandleColor, wickcolor=color.new(color.gray, 50), bordercolor=mtfCandleColor)
+
+if showCandleCount and barstate.islast
+    label.new(bar_index, indicator_high, text="Candles: " + str.tostring(blockCandleCount), style=label.style_label_down, color=color.new(color.blue, 70), textcolor=color.white, size=size.normal)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATISTICS TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+if showStats and barstate.islast
+    var table statsTable = table.new(f_getTablePosition(statsPosition), 2, 8, border_width=1, border_color=color.gray)
+    
+    table.cell(statsTable, 0, 0, "BoC STATISTICS", bgcolor=color.new(color.gray, 30), text_color=color.white, text_size=size.normal)
+    table.cell(statsTable, 1, 0, "", bgcolor=color.new(color.gray, 30))
+    table.cell(statsTable, 0, 1, "Total Blocks:", text_color=color.gray, text_size=size.small)
+    table.cell(statsTable, 1, 1, str.tostring(totalBlocksClosed), text_color=color.white, text_size=size.small)
+    table.cell(statsTable, 0, 2, "Current Block:", text_color=color.gray, text_size=size.small)
+    table.cell(statsTable, 1, 2, str.tostring(blockCandleCount) + " candles", text_color=color.yellow, text_size=size.small)
+    table.cell(statsTable, 0, 3, "Avg Candles/Block:", text_color=color.gray, text_size=size.small)
+    table.cell(statsTable, 1, 3, str.tostring(avgBlockLength, "#.##"), text_color=color.white, text_size=size.small)
+    table.cell(statsTable, 0, 4, "Avg Range:", text_color=color.gray, text_size=size.small)
+    table.cell(statsTable, 1, 4, str.tostring(avgBlockRange, "#.####"), text_color=color.white, text_size=size.small)
+    table.cell(statsTable, 0, 5, "Longest Block:", text_color=color.gray, text_size=size.small)
+    table.cell(statsTable, 1, 5, str.tostring(longestBlock) + " candles", text_color=color.aqua, text_size=size.small)
+    table.cell(statsTable, 0, 6, "Bullish Breaks:", text_color=color.gray, text_size=size.small)
+    table.cell(statsTable, 1, 6, str.tostring(bullishBreakouts), text_color=color.green, text_size=size.small)
+    table.cell(statsTable, 0, 7, "Bearish Breaks:", text_color=color.gray, text_size=size.small)
+    table.cell(statsTable, 1, 7, str.tostring(bearishBreakouts), text_color=color.red, text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERT CONDITIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool bullishBreakoutNow = indicator_close > indicator_open and indicator_close > indicator_open[1] and blockCandleCount[1] > 5
+bool bearishBreakoutNow = indicator_close < indicator_open and indicator_close < indicator_open[1] and blockCandleCount[1] > 5
+
+plotchar(bullishBreakoutNow and alertOnBullishBreak, "Bullish Breakout Alert", "▲", location.top, color.green, size=size.tiny)
+plotchar(bearishBreakoutNow and alertOnBearishBreak, "Bearish Breakout Alert", "▼", location.bottom, color.red, size=size.tiny)
