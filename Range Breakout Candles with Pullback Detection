@@ -1,0 +1,209 @@
+//@version=5
+indicator("Range Breakout Candles with Pullback Detection - Fixed", overlay=false, max_bars_back=5000)
+
+// ==================== CZĘŚĆ 1: BREAKOUT CANDLES ====================
+
+var float ref_high = na
+var float ref_low = na
+var float ref_close = na
+
+if bar_index == 0
+    ref_high := high
+    ref_low := low
+    ref_close := close
+
+var float candle_open = na
+var float candle_high = na
+var float candle_low = na
+var float candle_close = na
+var bool draw_candle = false
+
+if bar_index == 0
+    candle_open := open
+    candle_high := high
+    candle_low := low
+    candle_close := close
+    draw_candle := true
+else
+    broke_high = high > ref_high
+    broke_low = low < ref_low
+    
+    if broke_high or broke_low
+        candle_open := open
+        candle_high := high
+        candle_low := low
+        candle_close := close
+        draw_candle := true
+        
+        ref_high := high
+        ref_low := low
+        ref_close := close
+    else
+        draw_candle := false
+
+plot_open = draw_candle ? candle_open : na
+plot_high = draw_candle ? candle_high : na
+plot_low = draw_candle ? candle_low : na
+plot_close = draw_candle ? candle_close : na
+
+// ==================== CZĘŚĆ 2: PULLBACK DETECTION ====================
+
+var array<float> hist_open = array.new<float>(3, na)
+var array<float> hist_high = array.new<float>(3, na)
+var array<float> hist_low = array.new<float>(3, na)
+var array<float> hist_close = array.new<float>(3, na)
+
+// KLUCZOWA ZMIANA: Resetuj flagi pullback na początku każdego bara
+bool is_pullback = false
+bool is_engulfing_pullback = false
+
+if draw_candle
+    array.push(hist_open, candle_open)
+    array.push(hist_high, candle_high)
+    array.push(hist_low, candle_low)
+    array.push(hist_close, candle_close)
+    
+    if array.size(hist_open) > 3
+        array.shift(hist_open)
+        array.shift(hist_high)
+        array.shift(hist_low)
+        array.shift(hist_close)
+
+candle_0_high = array.size(hist_high) > 0 ? array.get(hist_high, array.size(hist_high) - 1) : na
+candle_0_low = array.size(hist_low) > 0 ? array.get(hist_low, array.size(hist_low) - 1) : na
+candle_0_close = array.size(hist_close) > 0 ? array.get(hist_close, array.size(hist_close) - 1) : na
+candle_0_open = array.size(hist_open) > 0 ? array.get(hist_open, array.size(hist_open) - 1) : na
+
+candle_1_high = array.size(hist_high) > 1 ? array.get(hist_high, array.size(hist_high) - 2) : na
+candle_1_low = array.size(hist_low) > 1 ? array.get(hist_low, array.size(hist_low) - 2) : na
+candle_1_close = array.size(hist_close) > 1 ? array.get(hist_close, array.size(hist_close) - 2) : na
+
+var string local_trend = "none"
+var float reference_candle_high = na
+var float reference_candle_low = na
+var float local_extreme = na
+
+if array.size(hist_high) >= 2 and not na(candle_1_high) and not na(candle_0_high)
+    is_higher_high = candle_0_high > candle_1_high
+    is_higher_low = candle_0_low > candle_1_low
+    
+    is_lower_high = candle_0_high < candle_1_high
+    is_lower_low = candle_0_low < candle_1_low
+    
+    if draw_candle
+        if is_higher_high and is_higher_low
+            local_trend := "uptrend"
+            reference_candle_high := candle_1_high
+            reference_candle_low := candle_1_low
+            local_extreme := candle_0_high
+        else if is_lower_high and is_lower_low
+            local_trend := "downtrend"
+            reference_candle_high := candle_1_high
+            reference_candle_low := candle_1_low
+            local_extreme := candle_0_low
+
+// KLUCZOWA ZMIANA: Detekcja pullback TYLKO gdy draw_candle == true
+if draw_candle and local_trend != "none" and not na(reference_candle_high) and not na(reference_candle_low)
+    
+    // === TREND WZROSTOWY ===
+    if local_trend == "uptrend"
+        broke_ref_high = candle_0_high > reference_candle_high
+        broke_ref_low = candle_0_low < reference_candle_low
+        closed_below_ref_low = candle_0_close < reference_candle_low
+        
+        // Scenariusz b) Engulfing
+        if broke_ref_high and broke_ref_low
+            is_engulfing_pullback := true
+            local_extreme := candle_0_high
+            reference_candle_high := candle_0_high
+            reference_candle_low := candle_0_low
+        
+        // Scenariusz c) Kontynuacja
+        else if broke_ref_high and not broke_ref_low
+            local_extreme := candle_0_high
+            reference_candle_high := candle_0_high
+            reference_candle_low := candle_0_low
+        
+        // Pullback - zamknięcie poniżej low
+        else if closed_below_ref_low and not na(local_extreme)
+            is_pullback := true
+    
+    // === TREND SPADKOWY ===
+    else if local_trend == "downtrend"
+        broke_ref_high = candle_0_high > reference_candle_high
+        broke_ref_low = candle_0_low < reference_candle_low
+        closed_above_ref_high = candle_0_close > reference_candle_high
+        
+        // Scenariusz b) Engulfing
+        if broke_ref_low and broke_ref_high
+            is_engulfing_pullback := true
+            local_extreme := candle_0_low
+            reference_candle_high := candle_0_high
+            reference_candle_low := candle_0_low
+        
+        // Scenariusz c) Kontynuacja
+        else if broke_ref_low and not broke_ref_high
+            local_extreme := candle_0_low
+            reference_candle_high := candle_0_high
+            reference_candle_low := candle_0_low
+        
+        // Pullback - zamknięcie powyżej high
+        else if closed_above_ref_high and not na(local_extreme)
+            is_pullback := true
+
+// ==================== CZĘŚĆ 3: WIZUALIZACJA ====================
+
+plotcandle(plot_open, plot_high, plot_low, plot_close, 
+     title="Breakout Candles", 
+     color=plot_close >= plot_open ? color.new(color.green, 0) : color.new(color.red, 0),
+     wickcolor=plot_close >= plot_open ? color.new(color.green, 0) : color.new(color.red, 0),
+     bordercolor=plot_close >= plot_open ? color.new(color.green, 0) : color.new(color.red, 0))
+
+// KLUCZOWA ZMIANA: Plotshape TYLKO gdy draw_candle jest true
+plotshape(
+     draw_candle and is_pullback and local_trend == "uptrend", 
+     title="Bullish Pullback", 
+     style=shape.circle, 
+     location=location.abovebar, 
+     color=color.new(color.lime, 0), 
+     size=size.small
+     )
+
+plotshape(
+     draw_candle and is_pullback and local_trend == "downtrend", 
+     title="Bearish Pullback", 
+     style=shape.circle, 
+     location=location.belowbar, 
+     color=color.new(color.red, 0), 
+     size=size.small
+     )
+
+plotshape(
+     draw_candle and is_engulfing_pullback and local_trend == "uptrend", 
+     title="Bullish Engulfing Pullback", 
+     style=shape.diamond, 
+     location=location.abovebar, 
+     color=color.new(color.yellow, 0), 
+     size=size.normal
+     )
+
+plotshape(
+     draw_candle and is_engulfing_pullback and local_trend == "downtrend", 
+     title="Bearish Engulfing Pullback", 
+     style=shape.diamond, 
+     location=location.belowbar, 
+     color=color.new(color.orange, 0), 
+     size=size.normal
+     )
+
+show_levels = input.bool(false, "Pokaż poziomy referencyjne")
+plot(show_levels and not na(reference_candle_high) ? reference_candle_high : na, 
+     "Ref High", 
+     color=color.new(color.red, 60), 
+     style=plot.style_stepline,
+     linewidth=1)
+plot(show_levels and not na(reference_candle_low) ? reference_candle_low : na, 
+     "Ref Low", 
+     color=color.new(color.lime, 60), 
+     style=plot.style_stepline,
+     linewidth=1)
