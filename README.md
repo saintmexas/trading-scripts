@@ -47,3 +47,11 @@ Pine Script is TradingView’s programming language used to build custom indicat
 3. Create a new script (or open an existing one), then paste the code from this repository.
 4. Click **Save**.
 5. Click **Add to chart**.
+
+---
+
+## Disclaimer (Not financial advice)
+This repository is for educational and informational purposes only.
+Nothing in this repository (code, indicators, examples, descriptions, or any other materials) constitutes financial, investment, trading, or legal advice. The content is provided “as is” and without warranties of any kind.
+Trading and investing involve significant risk. You are solely responsible for any decisions you make and for any outcomes, including potential losses.
+Before using any indicator or strategy, test it thoroughly (e.g., on historical data and/or in a paper-trading environment) and consider consulting a qualified financial professional.
