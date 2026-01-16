@@ -19,6 +19,7 @@ Pine Script v5 indicator grouping candles into breakout candles (new high/low) a
 
 **Usage:** Enter on pullbacks in breakout trend direction. Works on crypto/forex, 1H-1D timeframes. Fixed flags and arrays for realtime stability.
 
+---
 
 ### Block of Candles (BoC)
 
@@ -35,3 +36,14 @@ optionally drawing mitigation zones for future retests. It also offers MTF view,
 - Set alerts for block close, bullish/bearish breakout or long blocks to automate monitoring of consolidation and breakout conditions.
 
 **Note:** Blocks with a higher candle count typically represent stronger consolidation zones with better-tested levels, making their mitigation zones more significant for entries. Consider using block length as a scoring/weighting factor when prioritizing setups.
+
+---
+
+## How to use scripts on platform TradingView
+Pine Script is TradingView’s programming language used to build custom indicators and strategies that run on TradingView.
+
+1. Open TradingView and go to any chart.
+2. Open **Pine Editor** (bottom panel).
+3. Create a new script (or open an existing one), then paste the code from this repository.
+4. Click **Save**.
+5. Click **Add to chart**.
