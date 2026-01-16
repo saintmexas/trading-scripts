@@ -1,6 +1,6 @@
 # trading-scripts
 
-### My Pine Script Ideas
+### TradingView indicators (Pine Script v5) 
 
 ---
 
